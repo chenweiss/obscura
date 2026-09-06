@@ -17421,6 +17421,52 @@ mod tests {
         let value = result.value.unwrap();
         assert!(value["url"].as_str().unwrap_or_default().ends_with("/hop/0"));
         assert_eq!(value["redirected"], true);
+
+        let events = rt.take_js_network_events();
+        assert_eq!(events.len(), 1, "stealth fetch must emit a CDP network event");
+        assert_eq!(events[0].url, value["url"].as_str().unwrap());
+        assert_eq!(events[0].method, "GET");
+        assert_eq!(events[0].status, 200);
+        let body = rt.get_network_response_body(&events[0].request_id).unwrap();
+        assert_eq!(body.body, "arrived");
+        assert!(!body.base64_encoded);
+    }
+
+    #[cfg(feature = "stealth")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn stealth_xhr_records_the_response_body_for_cdp() {
+        let mut rt = redirect_chain_runtime(1);
+        rt.set_stealth_client(std::sync::Arc::new(
+            obscura_net::StealthHttpClient::new(std::sync::Arc::new(
+                obscura_net::CookieJar::new(),
+            )),
+        ));
+        let result = rt
+            .call_function_on_for_cdp(
+                r#"async () => await new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open("POST", "/hop/0");
+                    xhr.onload = () => resolve(xhr.responseText);
+                    xhr.onerror = reject;
+                    xhr.send("{}");
+                })"#,
+                None,
+                &[],
+                true,
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.value.unwrap(), serde_json::json!("arrived"));
+        let events = rt.take_js_network_events();
+        assert_eq!(events.len(), 1, "stealth XHR must emit a CDP network event");
+        assert_eq!(events[0].method, "POST");
+        assert_eq!(events[0].status, 200);
+        assert_eq!(events[0].body_size, 7);
+        let body = rt.get_network_response_body(&events[0].request_id).unwrap();
+        assert_eq!(body.body, "arrived");
+        assert!(!body.base64_encoded);
     }
 
     #[tokio::test(flavor = "current_thread")]
