@@ -733,6 +733,26 @@ fn accept_dispatch(
     ws_tx: &mpsc::Sender<std::net::TcpStream>,
     head: &str,
 ) -> anyhow::Result<()> {
+    let mut request_line = head.lines().next().unwrap_or_default().split_whitespace();
+    let is_root_get = request_line.next() == Some("GET") && request_line.next() == Some("/");
+    let is_websocket = head.lines().skip(1).any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.eq_ignore_ascii_case("upgrade") && value.trim().eq_ignore_ascii_case("websocket")
+        })
+    });
+    if is_root_get && !is_websocket {
+        use std::io::{Read, Write};
+
+        let mut stream = stream;
+        stream.set_nonblocking(false)?;
+        let mut request = [0u8; HTTP_PEEK_BUF];
+        let received = stream.peek(&mut request)?;
+        stream.read_exact(&mut request[..received])?;
+        stream.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")?;
+        stream.flush()?;
+        return Ok(());
+    }
+
     let endpoint = if head.contains("/json/version") {
         Some("version")
     } else if head.contains("/json/list") || head.contains("/json\r\n") || head.contains("/json HTTP") {
